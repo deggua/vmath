@@ -17,24 +17,28 @@
 #   define VMATH_ALIGN32     __attribute__((aligned(32)))
 #   define VMATH_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #   define VMATH_LIKELY(x)   __builtin_expect(!!(x), 1)
-#   if defined(__AVX2__)
-#       define VMATH_SIMD VMATH_SIMD_AVX2
-#   elif defined(__SSE__)
-#       define VMATH_SIMD VMATH_SIMD_SSE
-#   else
-#       define VMATH_SIMD VMATH_SIMD_NONE
+#   if !defined(VMATH_SIMD)
+#       if defined(__AVX2__)
+#           define VMATH_SIMD VMATH_SIMD_AVX2
+#       elif defined(__SSE__)
+#           define VMATH_SIMD VMATH_SIMD_SSE
+#       else
+#           define VMATH_SIMD VMATH_SIMD_NONE
+#       endif
 #   endif
 #elif defined(_MSC_VER)
 #   define VMATH_ALIGN16     __declspec(align(16))
 #   define VMATH_ALIGN32     __declspec(align(32))
 #   define VMATH_UNLIKELY(x) (x)
 #   define VMATH_LIKELY(x)   (x)
-#   if defined(__AVX2__)
-#       define VMATH_SIMD VMATH_SIMD_AVX2
-#   elif _M_IX86_FP >= 1
-#       define VMATH_SIMD VMATH_SIMD_SSE
-#   else
-#       define VMATH_SIMD VMATH_SIMD_NONE
+#   if !defined(VMATH_SIMD)
+#       if defined(__AVX2__)
+#           define VMATH_SIMD VMATH_SIMD_AVX2
+#       elif _M_IX86_FP >= 1
+#           define VMATH_SIMD VMATH_SIMD_SSE
+#       else
+#           define VMATH_SIMD VMATH_SIMD_NONE
+#       endif
 #   endif
 #endif
 
@@ -69,6 +73,8 @@
 #else
 #define POWF(base, exp) (powf((base), (exp)))
 #endif
+
+#define VMATH_BLEND_MASK(x, y, z, w) (((w) << 3) | ((z) << 2) | ((y) << 1) | ((x) << 0))
 
 #define VMATH_PRECISION ".02"
 
@@ -256,6 +262,7 @@
         VBIND(mat4x4, mat4x4_Transpose)  \
     )((x))
 
+// TODO: for all types
 #define vmax(x, y)                 \
     VMAP((x),                      \
         VBIND(default, scalar_Max) \
@@ -265,6 +272,11 @@
     VMAP((x),                      \
         VBIND(default, scalar_Min) \
     )((x), (y))
+
+// TODO: vsqrt, vrsqrt
+
+#define vclamp(t, t_min, t_max) vmax(vmin(t, t_max), t_min)
+#define vneg(x) (vmul(-1.0f, (x)))
 
 #define VMATH_OVERLOAD(IGNORE1, IGNORE2, IGNORE3, INGORE4, IGNORE5, IGNORE6, IGNORE7, NAME, ...) NAME
 
@@ -309,23 +321,23 @@
 
 #define mat2x2(m11, m12, m21, m22) \
     ((mat2x2) {                    \
-        .x.x = m11, .y.x = m12,    \
-        .x.y = m21, .y.y = m22,    \
+        .X.x = m11, .Y.x = m12,    \
+        .X.y = m21, .Y.y = m22,    \
     })
 
 #define mat3x3(m11, m12, m13, m21, m22, m23, m31, m32, m33) \
     ((mat3x3) {                                             \
-        .x.x = m11, .y.x = m12, .z.x = m13,                 \
-        .x.y = m21, .y.y = m22, .z.y = m23,                 \
-        .x.z = m31, .y.z = m32, .z.z = m33,                 \
+        .X.x = m11, .Y.x = m12, .Z.x = m13,                 \
+        .X.y = m21, .Y.y = m22, .Z.y = m23,                 \
+        .X.z = m31, .Y.z = m32, .Z.z = m33,                 \
     })
 
 #define mat4x4(m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44) \
     ((mat4x4) { \
-        .x.x = m11, .y.x = m12, .z.x = m13, .w.x = m14, \
-        .x.y = m21, .y.y = m22, .z.y = m23, .w.y = m24, \
-        .x.z = m31, .y.z = m32, .z.z = m33, .w.z = m34, \
-        .x.w = m41, .y.w = m42, .z.w = m43, .w.w = m44, \
+        .X.x = m11, .Y.x = m12, .Z.x = m13, .W.x = m14, \
+        .X.y = m21, .Y.y = m22, .Z.y = m23, .W.y = m24, \
+        .X.z = m31, .Y.z = m32, .Z.z = m33, .W.z = m34, \
+        .X.w = m41, .Y.w = m42, .Z.w = m43, .W.w = m44, \
     })
 
 /* ---- Types ---- */
@@ -457,24 +469,33 @@ typedef vec4 point4;
 
 typedef union {
     struct {
-        vec2 x, y;
+        vec2 X, Y;
     };
+
+    float elems[2][2];
 
     vec2 cols[2];
 } mat2x2;
 
 typedef union {
     struct {
-        vec3 x, y, z;
+        vec3 X, Y, Z;
     };
+
+    // elems[col][row]
+    float elems[3][3];
 
     vec3 cols[3];
 } mat3x3;
 
 typedef union {
     struct {
-        vec4 x, y, z, w;
+        vec4 X, Y, Z;
+        union { vec4 W; vec4 T; };
     };
+
+    // elems[col][row]
+    float elems[4][4];
 
     vec4 cols[4];
 
@@ -564,36 +585,36 @@ static inline bool  vec4_AlmostTheSame(vec4 v1, vec4 v2);
 
 /* --- mat2x2 --- */
 
-static inline vec2   mat2x2_MultiplyVector(mat2x2 m, vec2 v);
+static inline vec2   mat2x2_MultiplyVector(mat2x2 M, vec2 V);
 static inline mat2x2 mat2x2_MultiplyMatrix(mat2x2 left, mat2x2 right);
-static inline mat2x2 mat2x2_MultiplyScalar(mat2x2 m, float t);
-static inline mat2x2 mat2x2_MultiplyScalarR(float t, mat2x2 m);
-static inline mat2x2 mat2x2_Add(mat2x2 m1, mat2x2 m2);
-static inline mat2x2 mat2x2_Subtract(mat2x2 m1, mat2x2 m2);
-static inline mat2x2 mat2x2_DivideScalar(mat2x2 m, float t);
-static inline mat2x2 mat2x2_Transpose(mat2x2 m);
+static inline mat2x2 mat2x2_MultiplyScalar(mat2x2 M, float t);
+static inline mat2x2 mat2x2_MultiplyScalarR(float t, mat2x2 M);
+static inline mat2x2 mat2x2_Add(mat2x2 M1, mat2x2 M2);
+static inline mat2x2 mat2x2_Subtract(mat2x2 M1, mat2x2 M2);
+static inline mat2x2 mat2x2_DivideScalar(mat2x2 M, float t);
+static inline mat2x2 mat2x2_Transpose(mat2x2 M);
 
 /* --- mat3x3 --- */
 
-static inline vec3   mat3x3_MultiplyVector(mat3x3 m, vec3 v);
+static inline vec3   mat3x3_MultiplyVector(mat3x3 M, vec3 V);
 static inline mat3x3 mat3x3_MultiplyMatrix(mat3x3 left, mat3x3 right);
-static inline mat3x3 mat3x3_MultiplyScalar(mat3x3 m, float t);
-static inline mat3x3 mat3x3_MultiplyScalarR(float t, mat3x3 m);
-static inline mat3x3 mat3x3_Add(mat3x3 m1, mat3x3 m2);
-static inline mat3x3 mat3x3_Subtract(mat3x3 m1, mat3x3 m2);
-static inline mat3x3 mat3x3_DivideScalar(mat3x3 m, float t);
-static inline mat3x3 mat3x3_Transpose(mat3x3 m);
+static inline mat3x3 mat3x3_MultiplyScalar(mat3x3 M, float t);
+static inline mat3x3 mat3x3_MultiplyScalarR(float t, mat3x3 M);
+static inline mat3x3 mat3x3_Add(mat3x3 M1, mat3x3 M2);
+static inline mat3x3 mat3x3_Subtract(mat3x3 M1, mat3x3 M2);
+static inline mat3x3 mat3x3_DivideScalar(mat3x3 M, float t);
+static inline mat3x3 mat3x3_Transpose(mat3x3 M);
 
 /* --- mat4x4 --- */
 
-static inline vec4   mat4x4_MultiplyVector(mat4x4 m, vec4 v);
+static inline vec4   mat4x4_MultiplyVector(mat4x4 M, vec4 V);
 static inline mat4x4 mat4x4_MultiplyMatrix(mat4x4 left, mat4x4 right);
-static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 m, float t);
-static inline mat4x4 mat4x4_MultiplyScalarR(float t, mat4x4 m);
-static inline mat4x4 mat4x4_Add(mat4x4 m1, mat4x4 m2);
-static inline mat4x4 mat4x4_Subtract(mat4x4 m1, mat4x4 m2);
-static inline mat4x4 mat4x4_DivideScalar(mat4x4 m, float t);
-static inline mat4x4 mat4x4_Transpose(mat4x4 m);
+static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 M, float t);
+static inline mat4x4 mat4x4_MultiplyScalarR(float t, mat4x4 M);
+static inline mat4x4 mat4x4_Add(mat4x4 M1, mat4x4 M2);
+static inline mat4x4 mat4x4_Subtract(mat4x4 M1, mat4x4 M2);
+static inline mat4x4 mat4x4_DivideScalar(mat4x4 M, float t);
+static inline mat4x4 mat4x4_Transpose(mat4x4 M);
 
 /* ---- Scalar Functions ---- */
 
@@ -970,28 +991,6 @@ static inline vec4 vec4_Normalize(vec4 vec)
     return vec4_DivideScalar(vec, vec4_Magnitude(vec));
 }
 
-static inline bool vec4_CompareMagnitudeEqual(vec4 v1, float mag)
-{
-    float v1mag = vec4_MagnitudeSquared(v1);
-    return vequ(v1mag, mag * mag);
-}
-
-static inline bool vec4_CompareMagnitudeEqualR(float mag, vec4 v1)
-{
-    return vec4_CompareMagnitudeEqual(v1, mag);
-}
-
-static inline bool vec4_CompareMagnitudeGreaterThan(vec4 v1, float mag)
-{
-    float v1mag = vec4_MagnitudeSquared(v1);
-    return v1mag > mag;
-}
-
-static inline bool vec4_CompareMagnitudeGreaterThanR(float mag, vec4 v1)
-{
-    return vec4_CompareMagnitudeGreaterThan(v1, mag);
-}
-
 static inline bool vec4_AlmostTheSame(vec4 v1, vec4 v2)
 {
     return vequ(v1.x, v2.x) && vequ(v1.y, v2.y) && vequ(v1.z, v2.z) && vequ(v1.w, v2.w);
@@ -999,35 +998,35 @@ static inline bool vec4_AlmostTheSame(vec4 v1, vec4 v2)
 
 /* ---- 2x2 Matrix Functions ---- */
 
-static inline vec2 mat2x2_MultiplyVector(mat2x2 m, vec2 v)
+static inline vec2 mat2x2_MultiplyVector(mat2x2 M, vec2 V)
 {
     return vec2(
-        m.x.x * v.x + m.y.x * v.y,
-        m.x.y * v.x + m.y.y * v.y
+        M.X.x * V.x + M.Y.x * V.y,
+        M.X.y * V.x + M.Y.y * V.y
     );
 }
 
 static inline mat2x2 mat2x2_MultiplyMatrix(mat2x2 left, mat2x2 right)
 {
     return (mat2x2){
-        .x = mat2x2_MultiplyVector(left, right.x),
-        .y = mat2x2_MultiplyVector(left, right.y),
+        .X = mat2x2_MultiplyVector(left, right.X),
+        .Y = mat2x2_MultiplyVector(left, right.Y),
     };
 }
 
-static inline mat2x2 mat2x2_Transpose(mat2x2 m)
+static inline mat2x2 mat2x2_Transpose(mat2x2 M)
 {
     return mat2x2(
-        m.x.x, m.x.y,
-        m.y.x, m.y.y
+        M.X.x, M.X.y,
+        M.Y.x, M.Y.y
     );
 }
 
-static inline mat2x2 mat2x2_MultiplyScalar(mat2x2 m, float t)
+static inline mat2x2 mat2x2_MultiplyScalar(mat2x2 M, float t)
 {
     return (mat2x2){
-        .x = vec2_MultiplyScalar(m.x, t),
-        .y = vec2_MultiplyScalar(m.y, t),
+        .X = vec2_MultiplyScalar(M.X, t),
+        .Y = vec2_MultiplyScalar(M.Y, t),
     };
 }
 
@@ -1036,146 +1035,146 @@ static inline mat2x2 mat2x2_MultiplyScalarR(float t, mat2x2 m)
     return mat2x2_MultiplyScalar(m, t);
 }
 
-static inline mat2x2 mat2x2_Add(mat2x2 m1, mat2x2 m2)
+static inline mat2x2 mat2x2_Add(mat2x2 M1, mat2x2 M2)
 {
     return (mat2x2){
-        .x = vec2_Add(m1.x, m2.x),
-        .y = vec2_Add(m1.y, m2.y),
+        .X = vec2_Add(M1.X, M2.X),
+        .Y = vec2_Add(M1.Y, M2.Y),
     };
 }
 
-static inline mat2x2 mat2x2_Subtract(mat2x2 m1, mat2x2 m2)
+static inline mat2x2 mat2x2_Subtract(mat2x2 M1, mat2x2 M2)
 {
     return (mat2x2){
-        .x = vec2_Subtract(m1.x, m2.x),
-        .y = vec2_Subtract(m1.y, m2.y),
+        .X = vec2_Subtract(M1.X, M2.X),
+        .Y = vec2_Subtract(M1.Y, M2.Y),
     };
 }
 
-static inline mat2x2 mat2x2_DivideScalar(mat2x2 m, float t)
+static inline mat2x2 mat2x2_DivideScalar(mat2x2 M, float t)
 {
-    return mat2x2_MultiplyScalar(m, 1.0f / t);
+    return mat2x2_MultiplyScalar(M, 1.0f / t);
 }
 
 /* ---- 3x3 Matrix Functions ---- */
 
-static inline vec3 mat3x3_MultiplyVector(mat3x3 m, vec3 v)
+static inline vec3 mat3x3_MultiplyVector(mat3x3 M, vec3 V)
 {
     return vec3(
-        m.x.x * v.x + m.y.x * v.y + m.z.x * v.z,
-        m.x.y * v.x + m.y.y * v.y + m.z.y * v.z,
-        m.x.z * v.x + m.y.z * v.y + m.z.z * v.z
+        M.X.x * V.x + M.Y.x * V.y + M.Z.x * V.z,
+        M.X.y * V.x + M.Y.y * V.y + M.Z.y * V.z,
+        M.X.z * V.x + M.Y.z * V.y + M.Z.z * V.z
     );
 }
 
 static inline mat3x3 mat3x3_MultiplyMatrix(mat3x3 left, mat3x3 right)
 {
     return (mat3x3){
-        .x = mat3x3_MultiplyVector(left, right.x),
-        .y = mat3x3_MultiplyVector(left, right.y),
-        .z = mat3x3_MultiplyVector(left, right.z),
+        .X = mat3x3_MultiplyVector(left, right.X),
+        .Y = mat3x3_MultiplyVector(left, right.Y),
+        .Z = mat3x3_MultiplyVector(left, right.Z),
     };
 }
 
-static inline mat3x3 mat3x3_Transpose(mat3x3 m)
+static inline mat3x3 mat3x3_Transpose(mat3x3 M)
 {
     return mat3x3(
-        m.x.x, m.x.y, m.x.z,
-        m.y.x, m.y.y, m.y.z,
-        m.z.x, m.z.y, m.z.z
+        M.X.x, M.X.y, M.X.z,
+        M.Y.x, M.Y.y, M.Y.z,
+        M.Z.x, M.Z.y, M.Z.z
     );
 }
 
-static inline mat3x3 mat3x3_MultiplyScalar(mat3x3 m, float t)
+static inline mat3x3 mat3x3_MultiplyScalar(mat3x3 M, float t)
 {
     return (mat3x3){
-        .x = vec3_MultiplyScalar(m.x, t),
-        .y = vec3_MultiplyScalar(m.y, t),
-        .z = vec3_MultiplyScalar(m.z, t),
+        .X = vec3_MultiplyScalar(M.X, t),
+        .Y = vec3_MultiplyScalar(M.Y, t),
+        .Z = vec3_MultiplyScalar(M.Z, t),
     };
 }
 
-static inline mat3x3 mat3x3_MultiplyScalarR(float t, mat3x3 m)
+static inline mat3x3 mat3x3_MultiplyScalarR(float t, mat3x3 M)
 {
-    return mat3x3_MultiplyScalar(m, t);
+    return mat3x3_MultiplyScalar(M, t);
 }
 
-static inline mat3x3 mat3x3_Add(mat3x3 m1, mat3x3 m2)
+static inline mat3x3 mat3x3_Add(mat3x3 M1, mat3x3 M2)
 {
     return (mat3x3){
-        .x = vec3_Add(m1.x, m2.x),
-        .y = vec3_Add(m1.y, m2.y),
-        .z = vec3_Add(m1.z, m2.z),
+        .X = vec3_Add(M1.X, M2.X),
+        .Y = vec3_Add(M1.Y, M2.Y),
+        .Z = vec3_Add(M1.Z, M2.Z),
     };
 }
 
-static inline mat3x3 mat3x3_Subtract(mat3x3 m1, mat3x3 m2)
+static inline mat3x3 mat3x3_Subtract(mat3x3 M1, mat3x3 M2)
 {
     return (mat3x3){
-        .x = vec3_Subtract(m1.x, m2.x),
-        .y = vec3_Subtract(m1.y, m2.y),
-        .z = vec3_Subtract(m1.z, m2.z),
+        .X = vec3_Subtract(M1.X, M2.X),
+        .Y = vec3_Subtract(M1.Y, M2.Y),
+        .Z = vec3_Subtract(M1.Z, M2.Z),
     };
 }
 
-static inline mat3x3 mat3x3_DivideScalar(mat3x3 m, float t)
+static inline mat3x3 mat3x3_DivideScalar(mat3x3 M, float t)
 {
-    return mat3x3_MultiplyScalar(m, 1.0f / t);
+    return mat3x3_MultiplyScalar(M, 1.0f / t);
 }
 
 /* ---- 4x4 Matrix Functions ---- */
 
 #if VMATH_SIMD == VMATH_SIMD_AVX2
-static inline vec4 mat4x4_MultiplyVector(mat4x4 m, vec4 v)
+static inline vec4 mat4x4_MultiplyVector(mat4x4 M, vec4 V)
 {
     __m128 xx, yy, zz, ww;
     __m128 tx, txy, txyz, txyzw;
 
-    xx = _mm_set1_ps(v.x);
-    tx = _mm_mul_ps(m.x.m128, xx);
+    xx = _mm_set1_ps(V.x);
+    tx = _mm_mul_ps(M.X.m128, xx);
 
-    yy = _mm_set1_ps(v.y);
-    txy = _mm_fmadd_ps(m.y.m128, yy, tx);
+    yy = _mm_set1_ps(V.y);
+    txy = _mm_fmadd_ps(M.Y.m128, yy, tx);
 
-    zz = _mm_set1_ps(v.z);
-    txyz = _mm_fmadd_ps(m.z.m128, zz, txy);
+    zz = _mm_set1_ps(V.z);
+    txyz = _mm_fmadd_ps(M.Z.m128, zz, txy);
 
-    ww = _mm_set1_ps(v.w);
-    txyzw = _mm_fmadd_ps(m.w.m128, ww, txyz);
+    ww = _mm_set1_ps(V.w);
+    txyzw = _mm_fmadd_ps(M.W.m128, ww, txyz);
 
     return (vec4){.m128 = txyzw};
 }
 #elif VMATH_SIMD == VMATH_SIMD_SSE
-static inline vec4 mat4x4_MultiplyVector(mat4x4 m, vec4 v)
+static inline vec4 mat4x4_MultiplyVector(mat4x4 M, vec4 V)
 {
     __m128 xx, yy, zz, ww;
     __m128 tx, ty, tz, tw;
     __m128 txyzw;
 
-    xx = _mm_set1_ps(v.x);
-    tx = _mm_mul_ps(m.x.m128, xx);
+    xx = _mm_set1_ps(V.x);
+    tx = _mm_mul_ps(M.X.m128, xx);
 
-    yy = _mm_set1_ps(v.y);
-    ty = _mm_mul_ps(m.y.m128, yy);
+    yy = _mm_set1_ps(V.y);
+    ty = _mm_mul_ps(M.Y.m128, yy);
 
-    zz = _mm_set1_ps(v.z);
-    tz = _mm_mul_ps(m.z.m128, zz);
+    zz = _mm_set1_ps(V.z);
+    tz = _mm_mul_ps(M.Z.m128, zz);
 
-    ww = _mm_set1_ps(v.w);
-    tw = _mm_mul_ps(m.w.m128, ww);
+    ww = _mm_set1_ps(V.w);
+    tw = _mm_mul_ps(M.W..m128, ww);
 
     txyzw = _mm_add_ps(_mm_add_ps(tx, ty), _mm_add_ps(tz, tw));
 
     return (vec4){.m128 = txyzw};
 }
 #elif VMATH_SIMD == VMATH_SIMD_NONE
-static inline vec4 mat4x4_MultiplyVector(mat4x4 m, vec4 v)
+static inline vec4 mat4x4_MultiplyVector(mat4x4 M, vec4 V)
 {
     return vec4(
-        m.x.x * v.x + m.y.x * v.y + m.z.x * v.z + m.w.x * v.w,
-        m.x.y * v.x + m.y.y * v.y + m.z.y * v.z + m.w.y * v.w,
-        m.x.z * v.x + m.y.z * v.y + m.z.z * v.z + m.w.z * v.w,
-        m.x.w * v.x + m.y.w * v.y + m.z.w * v.z + m.w.w * v.w
+        M.X.x * V.x + M.Y.x * V.y + M.Z.x * V.z + M.W.x * V.w,
+        M.X.y * V.x + M.Y.y * V.y + M.Z.y * V.z + M.W.y * V.w,
+        M.X.z * V.x + M.Y.z * V.y + M.Z.z * V.z + M.W.z * V.w,
+        M.X.w * V.x + M.Y.w * V.y + M.Z.w * V.z + M.W.w * V.w
     );
 }
 #endif
@@ -1183,20 +1182,20 @@ static inline vec4 mat4x4_MultiplyVector(mat4x4 m, vec4 v)
 static inline mat4x4 mat4x4_MultiplyMatrix(mat4x4 left, mat4x4 right)
 {
     return (mat4x4){
-        .x = mat4x4_MultiplyVector(left, right.x),
-        .y = mat4x4_MultiplyVector(left, right.y),
-        .z = mat4x4_MultiplyVector(left, right.z),
-        .w = mat4x4_MultiplyVector(left, right.w),
+        .X = mat4x4_MultiplyVector(left, right.X),
+        .Y = mat4x4_MultiplyVector(left, right.Y),
+        .Z = mat4x4_MultiplyVector(left, right.Z),
+        .W = mat4x4_MultiplyVector(left, right.W),
     };
 }
 
 #if VMATH_SIMD == VMATH_SIMD_AVX2
-static inline mat4x4 mat4x4_Transpose(mat4x4 m)
+static inline mat4x4 mat4x4_Transpose(mat4x4 M)
 {
     __m256i indices = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
 
-    __m256 xy = m.m256[0];
-    __m256 zw = m.m256[1];
+    __m256 xy = M.m256[0];
+    __m256 zw = M.m256[1];
 
     __m256 xyzw_xy = _mm256_unpacklo_ps(xy, zw);
     __m256 xyzw_zw = _mm256_unpackhi_ps(xy, zw);
@@ -1209,109 +1208,109 @@ static inline mat4x4 mat4x4_Transpose(mat4x4 m)
     };
 }
 #elif VMATH_SIMD == VMATH_SIMD_SSE
-static inline mat4x4 mat4x4_Transpose(mat4x4 m)
+static inline mat4x4 mat4x4_Transpose(mat4x4 M)
 {
-    __m128 xy_xy = _mm_unpacklo_ps(m.x.m128, m.y.m128);
-    __m128 xy_zw = _mm_unpackhi_ps(m.x.m128, m.y.m128);
+    __m128 xy_xy = _mm_unpacklo_ps(M.X.m128, M.Y.m128);
+    __m128 xy_zw = _mm_unpackhi_ps(M.X.m128, M.Y.m128);
 
-    __m128 zw_xy = _mm_unpacklo_ps(m.z.m128, m.w.m128);
-    __m128 zw_zw = _mm_unpackhi_ps(m.z.m128, m.w.m128);
+    __m128 zw_xy = _mm_unpacklo_ps(M.Z.m128, M.W.m128);
+    __m128 zw_zw = _mm_unpackhi_ps(M.Z.m128, M.W.m128);
 
     return (mat4x4){
-        .x.m128 = _mm_shuffle_ps(xy_xy, zw_xy, _MM_SHUFFLE(1, 0, 1, 0)),
-        .y.m128 = _mm_shuffle_ps(xy_xy, zw_xy, _MM_SHUFFLE(3, 2, 3, 2)),
-        .z.m128 = _mm_shuffle_ps(xy_zw, zw_zw, _MM_SHUFFLE(1, 0, 1, 0)),
-        .w.m128 = _mm_shuffle_ps(xy_zw, zw_zw, _MM_SHUFFLE(3, 2, 3, 2)),
+        .X.m128 = _mm_shuffle_ps(xy_xy, zw_xy, _MM_SHUFFLE(1, 0, 1, 0)),
+        .Y.m128 = _mm_shuffle_ps(xy_xy, zw_xy, _MM_SHUFFLE(3, 2, 3, 2)),
+        .Z.m128 = _mm_shuffle_ps(xy_zw, zw_zw, _MM_SHUFFLE(1, 0, 1, 0)),
+        .W.m128 = _mm_shuffle_ps(xy_zw, zw_zw, _MM_SHUFFLE(3, 2, 3, 2)),
     };
 }
 #else
-static inline mat4x4 mat4x4_Transpose(mat4x4 m)
+static inline mat4x4 mat4x4_Transpose(mat4x4 M)
 {
     return mat4x4(
-        m.x.x, m.x.y, m.x.z, m.x.w,
-        m.y.x, m.y.y, m.y.z, m.y.w,
-        m.z.x, m.z.y, m.z.z, m.z.w,
-        m.w.x, m.w.y, m.w.z, m.w.w
+        M.X.x, M.X.y, M.X.z, M.X.w,
+        M.Y.x, M.Y.y, M.Y.z, M.Y.w,
+        M.Z.x, M.Z.y, M.Z.z, M.Z.w,
+        M.W.x, M.W.y, M.W.z, M.W.w
     );
 }
 #endif
 
 #if VMATH_SIMD == VMATH_SIMD_AVX2
-static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 m, float t)
+static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 M, float t)
 {
     __m256 vt = _mm256_set1_ps(t);
 
     return (mat4x4){
         .m256 = {
-            _mm256_mul_ps(vt, m.m256[0]),
-            _mm256_mul_ps(vt, m.m256[1]),
+            _mm256_mul_ps(vt, M.m256[0]),
+            _mm256_mul_ps(vt, M.m256[1]),
         },
     };
 }
 #else
-static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 m, float t)
+static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 M, float t)
 {
     return (mat4x4){
-        .x = vec4_MultiplyScalar(m.x, t),
-        .y = vec4_MultiplyScalar(m.y, t),
-        .z = vec4_MultiplyScalar(m.z, t),
-        .w = vec4_MultiplyScalar(m.w, t),
+        .X = vec4_MultiplyScalar(M.x, t),
+        .Y = vec4_MultiplyScalar(M.y, t),
+        .Z = vec4_MultiplyScalar(M.z, t),
+        .W = vec4_MultiplyScalar(M.w, t),
     };
 }
 #endif
 
-static inline mat4x4 mat4x4_MultiplyScalarR(float t, mat4x4 m)
+static inline mat4x4 mat4x4_MultiplyScalarR(float t, mat4x4 M)
 {
-    return mat4x4_MultiplyScalar(m, t);
+    return mat4x4_MultiplyScalar(M, t);
 }
 
 #if VMATH_SIMD == VMATH_SIMD_AVX2
-static inline mat4x4 mat4x4_Add(mat4x4 m1, mat4x4 m2)
+static inline mat4x4 mat4x4_Add(mat4x4 M1, mat4x4 M2)
 {
     return (mat4x4){
         .m256 = {
-            _mm256_add_ps(m1.m256[0], m2.m256[0]),
-            _mm256_add_ps(m1.m256[1], m2.m256[1]),
+            _mm256_add_ps(M1.m256[0], M2.m256[0]),
+            _mm256_add_ps(M1.m256[1], M2.m256[1]),
         },
     };
 }
 #else
-static inline mat4x4 mat4x4_Add(mat4x4 m1, mat4x4 m2)
+static inline mat4x4 mat4x4_Add(mat4x4 M1, mat4x4 M2)
 {
     return (mat4x4){
-        .x = vec4_Add(m1.x, m2.x),
-        .y = vec4_Add(m1.y, m2.y),
-        .z = vec4_Add(m1.z, m2.z),
-        .w = vec4_Add(m1.w, m2.w),
+        .X = vec4_Add(M1.X, M2.X),
+        .Y = vec4_Add(M1.Y, M2.Y),
+        .Z = vec4_Add(M1.Z, M2.Z),
+        .W = vec4_Add(M1.W, M2.W),
     };
 }
 #endif
 
 #if VMATH_SIMD == VMATH_SIMD_AVX2
-static inline mat4x4 mat4x4_Subtract(mat4x4 m1, mat4x4 m2)
+static inline mat4x4 mat4x4_Subtract(mat4x4 M1, mat4x4 M2)
 {
     return (mat4x4){
         .m256 = {
-            _mm256_sub_ps(m1.m256[0], m2.m256[0]),
-            _mm256_sub_ps(m1.m256[1], m2.m256[1]),
+            _mm256_sub_ps(M1.m256[0], M2.m256[0]),
+            _mm256_sub_ps(M1.m256[1], M2.m256[1]),
         },
     };
 }
 #else
-static inline mat4x4 mat4x4_Subtract(mat4x4 m1, mat4x4 m2)
+static inline mat4x4 mat4x4_Subtract(mat4x4 M1, mat4x4 M2)
 {
     return (mat4x4){
-        .x = vec4_Subtract(m1.x, m2.x),
-        .y = vec4_Subtract(m1.y, m2.y),
-        .z = vec4_Subtract(m1.z, m2.z),
-        .w = vec4_Subtract(m1.w, m2.w),
+        .x = vec4_Subtract(M1.x, M2.X),
+        .y = vec4_Subtract(M1.y, M2.Y),
+        .z = vec4_Subtract(M1.z, M2.Z),
+        .w = vec4_Subtract(M1.w, M2.W),
     };
 }
 #endif
 
-static inline mat4x4 mat4x4_DivideScalar(mat4x4 m, float t)
+static inline mat4x4 mat4x4_DivideScalar(mat4x4 M, float t)
 {
-    return mat4x4_MultiplyScalar(m, 1.0f / t);
+    return mat4x4_MultiplyScalar(M, 1.0f / t);
 }
 
 /* --- Misc Functions ---- */
@@ -1326,44 +1325,249 @@ static inline float Degrees(float radians)
     return radians * 180.0f / PI32;
 }
 
-static inline vec3 Reflect(vec3 vec, vec3 normal)
+static inline vec3 Reflect(vec3 V_in, vec3 normal)
 {
-    return vsub(vec, vmul(normal, 2.0f * vdot(vec, normal)));
+    return vsub(V_in, vmul(normal, 2.0f * vdot(V_in, normal)));
 }
 
-static inline vec3 Refract(vec3 vec, vec3 normal, float refractRatio)
+// eta = IOR (outer) / IOR (inner)
+static inline vec3 Refract(vec3 V_in, vec3 V_normal, float eta)
 {
-    float cosTheta = vmin(vdot(vmul(vec, -1), normal), 1.0f);
-    vec3 vecOutPerp = vmul(vadd(vec, vmul(normal, cosTheta)), refractRatio);
-    vec3 vecOutPara = vmul(normal, -sqrtf(vmag(1.0f - vdot(vecOutPerp, vecOutPerp))));
-    return vadd(vecOutPerp, vecOutPara);
+    float cos_theta = vmin(vdot(vmul(V_in, -1), V_normal), 1.0f);
+    vec3 V_perp = vmul(vadd(V_in, vmul(V_normal, cos_theta)), eta);
+    vec3 V_para = vmul(V_normal, -sqrtf(vmag(1.0f - vdot(V_perp, V_perp))));
+    return vadd(V_perp, V_para);
 }
 
-// TODO: figure out what to name this function
-// Creates an orthonormal basis with a vector bz as the Z basis vector
+// Creates an orthonormal basis with the argument as the Z basis vector
 // See: https://backend.orbit.dtu.dk/ws/portalfiles/portal/126824972/onb_frisvad_jgt2012_v2.pdf
 // WARNING: normal_in_z must be normalized
 static inline mat3x3 OrthonormalBasis(vec3 normal_in_z)
 {
-    vec3 bz = normal_in_z;
-    vec3 bx, by;
-    if (VMATH_UNLIKELY(bz.z < -0.9999999f)) {
-        by = vec3(0.0f, -1.0f, 0.0f);
-        bx = vec3(-1.0f, 0.0f, 0.0f);
+    vec3 B_z = normal_in_z;
+    vec3 B_x, B_y;
+    if (VMATH_UNLIKELY(B_z.z < -0.9999999f)) {
+        B_y = vec3(0.0f, -1.0f, 0.0f);
+        B_x = vec3(-1.0f, 0.0f, 0.0f);
     } else {
-        float a = 1.0f / (1.0f + bz.z);
-        float b = -bz.x * bz.y * a;
+        float a = 1.0f / (1.0f + B_z.z);
+        float b = -B_z.x * B_z.y * a;
 
-        by = vec3(-1.0f + bz.x * bz.x * a, -b, bz.x);
-        bx = vec3(-b, -1.0f + bz.y * bz.y * a, bz.y);
+        B_y = vec3(-1.0f + B_z.x * B_z.x * a, -b, B_z.x);
+        B_x = vec3(-b, -1.0f + B_z.y * B_z.y * a, B_z.y);
     }
 
     return (mat3x3) {
-        .x = bx,
-        .y = by,
-        .z = bz,
+        .X = B_x,
+        .Y = B_y,
+        .Z = B_z,
     };
 }
 
-// static inline mat4x4 InverseAffine(mat4x4 m){}
-//
+// computes the inverse matrix of a matrix of the form
+// | 1 0 0 Tx |
+// | 0 1 0 Ty |
+// | 0 0 1 Tz |
+// | 0 0 0  1 |
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_Translation(mat4x4 M) {
+    return (mat4x4){
+        .X = M.X,
+        .Y = M.Y,
+        .Z = M.Z,
+        .T.m128 = _mm_sub_ps(_mm_setr_ps(0.0f, 0.0f, 0.0f, 2.0f), M.T.m128),
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_Translation(mat4x4 M) {
+    return mat4x4(
+        1, 0, 0, -M.T.x,
+        0, 1, 0, -M.T.y,
+        0, 0, 1, -M.T.z,
+        0, 0, 0,      1
+    );
+}
+#endif
+
+// computes the inverse matrix of a matrix of the form
+// | Xx Yx Zx Tx |
+// | Xy Yy Zy Ty |
+// | Xz Yz Zz Tz |
+// |  0  0  0  1 |
+// where |X| = |Y| = |Z| = 1
+// and X.Y = 0, X.Z = 0, Y.Z = 0
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M) {
+    __m128 XY_xy = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(1, 0, 1, 0)); // X.x X.y Y.x Y.y
+    __m128 XY_zw = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(3, 2, 3, 2)); // X.z X.w Y.z Y.w
+
+    __m128 X_tr = _mm_shuffle_ps(XY_xy, M.Z.m128, _MM_SHUFFLE(3, 0, 2, 0)); // X.x Y.x Z.x 0
+    __m128 Y_tr = _mm_shuffle_ps(XY_xy, M.Z.m128, _MM_SHUFFLE(3, 1, 3, 1)); // X.y Y.y Z.y 0
+    __m128 Z_tr = _mm_shuffle_ps(XY_zw, M.Z.m128, _MM_SHUFFLE(3, 2, 2, 0)); // X.z Y.z Z.z 0
+
+    __m128 T_x = _mm_set1_ps(M.T.x);
+    __m128 T_y = _mm_set1_ps(M.T.y);
+    __m128 T_z = _mm_set1_ps(M.T.z);
+
+#if VMATH_SIMD == VMATH_SIMD_AVX2
+    __m128 T = _mm_mul_ps(T_x, X_tr);
+    T = _mm_fmadd_ps(T_y, Y_tr, T);
+    T = _mm_fmadd_ps(T_z, Z_tr, T);
+#elif VMATH_SIMD == VMATH_SIMD_SSE
+    __m128 T = _mm_mul_ps(T_x, X_tr);
+    T = _mm_add_ps(_mm_mul_ps(T_y, Y_tr), T);
+    T = _mm_add_ps(_mm_mul_ps(T_z, Z_tr), T);
+#endif
+
+    T = _mm_sub_ps(_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f), T);
+
+    return (mat4x4){
+        .X.m128 = X_tr,
+        .Y.m128 = Y_tr,
+        .Z.m128 = Z_tr,
+        .T.m128 = T,
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M) {
+    return mat4x4(
+        M.X.x, M.X.y, M.X.z, -vdot(M.T.xyz, M.X.xyz),
+        M.Y.x, M.Y.y, M.Y.z, -vdot(M.T.xyz, M.Y.xyz),
+        M.Z.x, M.Z.y, M.Z.z, -vdot(M.T.xyz, M.Z.xyz),
+            0,     0,     0,                       1
+    );
+}
+#endif
+
+// computes the inverse matrix of a matrix of the form
+// | a 0 0 Tx |
+// | 0 b 0 Ty |
+// | 0 0 c Tz |
+// | 0 0 0  1 |
+// where |X| = a, |Y| = b, |Z| = c
+// and a != 0, b != 0, c != 0
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
+    __m128 X_tr = M.X.m128;
+    __m128 Y_tr = M.Y.m128;
+    __m128 Z_tr = M.Z.m128;
+
+    // mag2 = X.x^2 Y.y^2 Z.z^2 1
+    __m128 ones = _mm_set1_ps(1.0f);
+    __m128 mag2 = _mm_mul_ps(X_tr, X_tr);
+    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Y_tr, Y_tr));
+    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Z_tr, Z_tr));
+    mag2 = _mm_blend_ps(ones, mag2, VMATH_BLEND_MASK(1, 1, 1, 0));
+
+    // inv_mag2 = 1/X.x^2 1/Y.y^2 1/Z.z^2 1
+    __m128 inv_mag2 = _mm_div_ps(ones, mag2);
+
+    X_tr = _mm_mul_ps(inv_mag2, X_tr);
+    Y_tr = _mm_mul_ps(inv_mag2, Y_tr);
+    Z_tr = _mm_mul_ps(inv_mag2, Z_tr);
+
+    __m128 T = _mm_add_ps(X_tr, _mm_add_ps(Y_tr, Z_tr));
+    T = _mm_mul_ps(T, M.T.m128);
+    T = _mm_sub_ps(_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f), T);
+
+    return (mat4x4){
+        .X.m128 = X_tr,
+        .Y.m128 = Y_tr,
+        .Z.m128 = Z_tr,
+        .T.m128 = T,
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
+    float inv_mx2 = 1.0f / (M.X.x * M.X.x);
+    float inv_my2 = 1.0f / (M.Y.y * M.Y.y);
+    float inv_mz2 = 1.0f / (M.Z.z * M.Z.z);
+
+    return mat4x4(
+        inv_mx2 * M.X.x,           0,               0, inv_mx2 * -(M.T.x * M.X.x),
+        0,           inv_my2 * M.Y.y,               0, inv_my2 * -(M.T.y * M.Y.y),
+        0,                         0, inv_mz2 * M.Z.z, inv_mz2 * -(M.T.z * M.Z.z),
+        0,                         0,               0,                          1
+    );
+}
+#endif
+
+// computes the inverse matrix of a matrix of the form
+// | Xx Yx Zx Tx |
+// | Xy Yy Zy Ty |
+// | Xz Yz Zz Tz |
+// |  0  0  0  1 |
+// where |X| = a, |Y| = b, |Z| = c
+// and a != 0, b != 0, c != 0
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
+    // transpose
+    __m128 XY_xy = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(1, 0, 1, 0)); // X.x X.y Y.x Y.y
+    __m128 XY_zw = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(3, 2, 3, 2)); // X.z X.w Y.z Y.w
+
+    __m128 X_tr = _mm_shuffle_ps(XY_xy, M.Z.m128, _MM_SHUFFLE(3, 0, 2, 0)); // X.x Y.x Z.x 0
+    __m128 Y_tr = _mm_shuffle_ps(XY_xy, M.Z.m128, _MM_SHUFFLE(3, 1, 3, 1)); // X.y Y.y Z.y 0
+    __m128 Z_tr = _mm_shuffle_ps(XY_zw, M.Z.m128, _MM_SHUFFLE(3, 2, 2, 0)); // X.z Y.z Z.z 0
+
+    // mag2 = X.x^2 Y.y^2 Z.z^2 1
+    __m128 ones = _mm_set1_ps(1.0f);
+    __m128 mag2 = _mm_mul_ps(X_tr, X_tr);
+    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Y_tr, Y_tr));
+    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Z_tr, Z_tr));
+    mag2 = _mm_blend_ps(ones, mag2, VMATH_BLEND_MASK(1, 1, 1, 0));
+
+    // inv_mag2 = 1/X.x^2 1/Y.y^2 1/Z.z^2 1
+    __m128 inv_mag2 = _mm_div_ps(ones, mag2);
+
+    X_tr = _mm_mul_ps(inv_mag2, X_tr);
+    Y_tr = _mm_mul_ps(inv_mag2, Y_tr);
+    Z_tr = _mm_mul_ps(inv_mag2, Z_tr);
+
+    __m128 T_x = _mm_set1_ps(M.T.x);
+    __m128 T_y = _mm_set1_ps(M.T.y);
+    __m128 T_z = _mm_set1_ps(M.T.z);
+
+#if VMATH_SIMD == VMATH_SIMD_AVX2
+    __m128 T = _mm_mul_ps(T_x, X_tr);
+    T = _mm_fmadd_ps(T_y, Y_tr, T);
+    T = _mm_fmadd_ps(T_z, Z_tr, T);
+#elif VMATH_SIMD == VMATH_SIMD_SSE
+    __m128 T = _mm_mul_ps(T_x, X_tr);
+    T = _mm_add_ps(_mm_mul_ps(T_y, Y_tr), T);
+    T = _mm_add_ps(_mm_mul_ps(T_z, Z_tr), T);
+#endif
+
+    T = _mm_sub_ps(_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f), T);
+
+    return (mat4x4){
+        .X.m128 = X_tr,
+        .Y.m128 = Y_tr,
+        .Z.m128 = Z_tr,
+        .T.m128 = T,
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
+    float inv_mx2 = 1.0f / vmag2(M.X.xyz);
+    float inv_my2 = 1.0f / vmag2(M.Y.xyz);
+    float inv_mz2 = 1.0f / vmag2(M.Z.xyz);
+
+    return mat4x4(
+        inv_mx2 * M.X.x, inv_mx2 * M.X.y, inv_mx2 * M.X.z, inv_mx2 * -vdot(M.T.xyz, M.X.xyz),
+        inv_my2 * M.Y.x, inv_my2 * M.Y.y, inv_my2 * M.Y.z, inv_my2 * -vdot(M.T.xyz, M.Y.xyz),
+        inv_mz2 * M.Z.x, inv_mz2 * M.Z.y, inv_mz2 * M.Z.z, inv_mz2 * -vdot(M.T.xyz, M.Z.xyz),
+                      0,               0,               0,                                 1
+    );
+}
+#endif
+
+// Converts a 3x3 matrix to a 4x4 matrix of the form
+static inline mat4x4 HomogeneousMatrix(mat3x3 M)
+{
+    return (mat4x4){
+        .X = {.xyz = M.X, .w = 0},
+        .Y = {.xyz = M.Y, .w = 0},
+        .Z = {.xyz = M.Z, .w = 0},
+        .T = vec4(0, 0, 0, 1),
+    };
+}
