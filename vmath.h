@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// TODO: see if lower dimension vector ops can be made faster by upcasting to __m128 for SIMD
+// might be faster in some cases, needs testing
+
 /* clang-format off */
 
 #define VMATH_SIMD_NONE 0
@@ -17,6 +20,11 @@
 #   define VMATH_ALIGN32     __attribute__((aligned(32)))
 #   define VMATH_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #   define VMATH_LIKELY(x)   __builtin_expect(!!(x), 1)
+#   if defined(__FAST_MATH__)
+#       define VMATH_APPROX 1
+#   else
+#       define VMATH_APPROX 0
+#   endif
 #   if !defined(VMATH_SIMD)
 #       if defined(__AVX2__)
 #           define VMATH_SIMD VMATH_SIMD_AVX2
@@ -31,6 +39,11 @@
 #   define VMATH_ALIGN32     __declspec(align(32))
 #   define VMATH_UNLIKELY(x) (x)
 #   define VMATH_LIKELY(x)   (x)
+#   if defined(_M_FP_FAST)
+#       define VMATH_APPROX 1
+#   else
+#       define VMATH_APPROX 0
+#   endif
 #   if !defined(VMATH_SIMD)
 #       if defined(__AVX2__)
 #           define VMATH_SIMD VMATH_SIMD_AVX2
@@ -46,10 +59,10 @@
 #   include <immintrin.h>
 #endif
 
-/* ---- Macros ---- */
+/* --- Utility Macros --- */
 
 #define PI32 (3.1415926535897932384626f)
-#define EPSILON32 (FLT_EPSILON)
+#define EPSILON32 (0.0001f)
 
 // TODO: make these compatible with different compilers and add some fallback for ISO C
 #ifndef INF32
@@ -59,6 +72,11 @@
 #ifndef NAN32
 #define NAN32 (__builtin_nanf(""))
 #endif
+
+#define VMAP _Generic
+#define VBIND(type, func) \
+    type:                 \
+    func
 
 // TODO: this doesn't appear to be faster than powf on -Ofast + unsafe math
 // needs more testing, but this is interesting
@@ -76,6 +94,8 @@
 
 #define VMATH_BLEND_MASK(x, y, z, w) (((w) << 3) | ((z) << 2) | ((y) << 1) | ((x) << 0))
 
+/* --- Format Macros --- */
+
 #define VMATH_PRECISION ".02"
 
 #define VEC2_FMT "<%" VMATH_PRECISION "f, %" VMATH_PRECISION "f>"
@@ -92,34 +112,31 @@
 #define MAT2X2_FMT "\n" \
                    "| %.02f %.02f |\n" \
                    "| %.02f %.02f |\n"
-#define MAT2X2_ARG(mat) mat.x.x, mat.y.x, \
-                        mat.x.y, mat.y.y
+#define MAT2X2_ARG(mat) mat.X.x, mat.Y.x, \
+                        mat.X.y, mat.Y.y
 
 #define MAT3X3_FMT "\n" \
                    "| %.02f %.02f %.02f |\n" \
                    "| %.02f %.02f %.02f |\n" \
                    "| %.02f %.02f %.02f |\n"
-#define MAT3X3_ARG(mat) mat.x.x, mat.y.x, mat.z.x, \
-                        mat.x.y, mat.y.y, mat.z.y, \
-                        mat.x.z, mat.y.z, mat.z.z
+#define MAT3X3_ARG(mat) mat.X.x, mat.Y.x, mat.Z.x, \
+                        mat.X.y, mat.Y.y, mat.Z.y, \
+                        mat.X.z, mat.Y.z, mat.Z.z
 
 #define MAT4X4_FMT "\n" \
                    "| %.02f %.02f %.02f %.02f |\n" \
                    "| %.02f %.02f %.02f %.02f |\n" \
                    "| %.02f %.02f %.02f %.02f |\n" \
                    "| %.02f %.02f %.02f %.02f |\n"
-#define MAT4X4_ARG(mat) mat.x.x, mat.y.x, mat.z.x, mat.w.x, \
-                        mat.x.y, mat.y.y, mat.z.y, mat.w.y, \
-                        mat.x.z, mat.y.z, mat.z.z, mat.w.z, \
-                        mat.x.w, mat.y.w, mat.z.w, mat.w.w
+#define MAT4X4_ARG(mat) mat.X.x, mat.Y.x, mat.Z.x, mat.W.x, \
+                        mat.X.y, mat.Y.y, mat.Z.y, mat.W.y, \
+                        mat.X.z, mat.Y.z, mat.Z.z, mat.W.z, \
+                        mat.X.w, mat.Y.w, mat.Z.w, mat.W.w
 
 #define AXIS_FMT "%s"
 #define AXIS_ARG(axis) (((const char*[]) {"x-axis", "y-axis", "z-axis", "w-axis"})[axis])
 
-#define VMAP _Generic
-#define VBIND(type, func) \
-    type:                 \
-    func
+/* --- Computation Macros --- */
 
 #define vadd(x, y)                 \
     VMAP((x),                      \
@@ -247,11 +264,12 @@
         VBIND(default, scalar_Lerp) \
     )((a), (b), (t))
 
+// TODO: implement for matrices
 #define vequ(x, y)                       \
     VMAP((x),                            \
-        VBIND(vec2, vec2_AlmostTheSame), \
-        VBIND(vec3, vec3_AlmostTheSame), \
-        VBIND(vec4, vec4_AlmostTheSame), \
+        VBIND(vec2, vec2_Equal),         \
+        VBIND(vec3, vec3_Equal),         \
+        VBIND(vec4, vec4_Equal),         \
         VBIND(default, scalar_Equal)     \
     )((x), (y))
 
@@ -262,21 +280,49 @@
         VBIND(mat4x4, mat4x4_Transpose)  \
     )((x))
 
-// TODO: for all types
 #define vmax(x, y)                 \
     VMAP((x),                      \
+        VBIND(vec2, vec2_Max),     \
+        VBIND(vec3, vec3_Max),     \
+        VBIND(vec4, vec4_Max),     \
         VBIND(default, scalar_Max) \
     )((x), (y))
 
 #define vmin(x, y)                 \
     VMAP((x),                      \
+        VBIND(vec2, vec2_Min),     \
+        VBIND(vec3, vec3_Min),     \
+        VBIND(vec4, vec4_Min),     \
         VBIND(default, scalar_Min) \
     )((x), (y))
 
-// TODO: vsqrt, vrsqrt
+#define vsqrt(x)                          \
+    VMAP((x),                             \
+        VBIND(vec2, vec2_SquareRoot),     \
+        VBIND(vec3, vec3_SquareRoot),     \
+        VBIND(vec4, vec4_SquareRoot),     \
+        VBIND(default, scalar_SquareRoot) \
+    )((x))
 
-#define vclamp(t, t_min, t_max) vmax(vmin(t, t_max), t_min)
+#define vrsqrt(x)                                   \
+    VMAP((x),                                       \
+        VBIND(vec2, vec2_ReciprocalSquareRoot),     \
+        VBIND(vec3, vec3_ReciprocalSquareRoot),     \
+        VBIND(vec4, vec4_ReciprocalSquareRoot),     \
+        VBIND(default, scalar_ReciprocalSquareRoot) \
+    )((x))
+
+#define vrcp(x)                           \
+    VMAP((x),                             \
+        VBIND(vec2, vec2_Reciprocal),     \
+        VBIND(vec3, vec3_Reciprocal),     \
+        VBIND(vec4, vec4_Reciprocal),     \
+        VBIND(default, scalar_Reciprocal) \
+    )((x))
+
+#define vclamp(t, t_min, t_max) (vmax(vmin((t), (t_max)), (t_min)))
 #define vneg(x) (vmul(-1.0f, (x)))
+#define vdist(a, b) (vmag(vsub((a), (b))))
 
 #define VMATH_OVERLOAD(IGNORE1, IGNORE2, IGNORE3, INGORE4, IGNORE5, IGNORE6, IGNORE7, NAME, ...) NAME
 
@@ -303,6 +349,8 @@
 #define vprod(v1, ...)                                                                            \
     VMATH_OVERLOAD(__VA_ARGS__, VPROD_8, VPROD_7, VPROD_6, VPROD_5, VPROD_4, VPROD_3, VPROD_2, _) \
     ((v1), __VA_ARGS__)
+
+/* --- Construction Macros --- */
 
 #define VMATH_VEC2_XY(x_, y_) ((vec2){.x = x_, .y = y_})
 #define VMATH_VEC2_SET(t_)    ((vec2){.x = t_, .y = t_})
@@ -339,6 +387,14 @@
         .X.z = m31, .Y.z = m32, .Z.z = m33, .W.z = m34, \
         .X.w = m41, .Y.w = m42, .Z.w = m43, .W.w = m44, \
     })
+
+#define point2(...) vec2(__VA_ARGS__)
+#define point3(...) vec3(__VA_ARGS__)
+#define point4(...) vec4(__VA_ARGS__)
+
+#define mat2(...) mat2x2(__VA_ARGS__)
+#define mat3(...) mat3x3(__VA_ARGS__)
+#define mat4(...) mat4x4(__VA_ARGS__)
 
 /* ---- Types ---- */
 
@@ -456,7 +512,7 @@ typedef union {
         uint32_t : 32;
     };
 
-    float elems[4];
+    float elem[4];
 
 #if VMATH_SIMD > VMATH_SIMD_NONE
     __m128 m128;
@@ -472,7 +528,10 @@ typedef union {
         vec2 X, Y;
     };
 
-    float elems[2][2];
+    // elems[col][row]
+    float elem[2][2];
+
+    float all[4];
 
     vec2 cols[2];
 } mat2x2;
@@ -483,7 +542,9 @@ typedef union {
     };
 
     // elems[col][row]
-    float elems[3][3];
+    float elem[3][3];
+
+    float all[9];
 
     vec3 cols[3];
 } mat3x3;
@@ -495,7 +556,9 @@ typedef union {
     };
 
     // elems[col][row]
-    float elems[4][4];
+    float elem[4][4];
+
+    float all[16];
 
     vec4 cols[4];
 
@@ -508,15 +571,16 @@ typedef union {
 #endif
 } VMATH_ALIGN32 mat4x4;
 
+typedef mat2x2 mat2;
+typedef mat3x3 mat3;
+typedef mat4x4 mat4;
+
 /* ---- Functions ---- */
 
 /* --- scalar --- */
 
 static inline float scalar_Min(float x, float y);
 static inline float scalar_Max(float x, float y);
-static inline float scalar_Clamp(float x, float min, float max);
-static inline float scalar_Radians(float degrees);
-static inline float scalar_Degrees(float radians);
 static inline float scalar_Lerp(float a, float b, float t);
 static inline bool  scalar_Equal(float a, float b);
 static inline float scalar_Multiply(float x, float y);
@@ -525,6 +589,9 @@ static inline float scalar_Add(float x, float y);
 static inline float scalar_Subtract(float x, float y);
 static inline float scalar_Magnitude(float t);
 static inline float scalar_MagnitudeSquared(float t);
+static inline float scalar_SquareRoot(float t);
+static inline float scalar_ReciprocalSquareRoot(float t);
+static inline float scalar_Reciprocal(float t);
 
 /* --- vec2 --- */
 
@@ -541,9 +608,12 @@ static inline float vec2_Magnitude(vec2 vec);
 static inline float vec2_MagnitudeSquared(vec2 vec);
 static inline vec2  vec2_Normalize(vec2 vec);
 static inline vec2  vec2_Lerp(vec2 v1, vec2 v2, float t);
-static inline bool  vec2_AlmostTheSame(vec2 v1, vec2 v2);
-static inline vec2  vec2_CartesianToPolar(vec2 cartesian);
-static inline vec2  vec2_PolarToCartesian(vec2 polar);
+static inline bool  vec2_Equal(vec2 v1, vec2 v2);
+static inline vec2  vec2_Max(vec2 v1, vec2 v2);
+static inline vec2  vec2_Min(vec2 v1, vec2 v2);
+static inline vec2  vec2_SquareRoot(vec2 v);
+static inline vec2  vec2_ReciprocalSquareRoot(vec2 v);
+static inline vec2  vec2_Reciprocal(vec2 v);
 
 /* --- vec3 --- */
 
@@ -560,11 +630,12 @@ static inline float vec3_Magnitude(vec3 vec);
 static inline float vec3_MagnitudeSquared(vec3 vec);
 static inline vec3  vec3_Normalize(vec3 vec);
 static inline vec3  vec3_Lerp(vec3 v1, vec3 v2, float t);
-static inline bool  vec3_AlmostTheSame(vec3 v1, vec3 v2);
-static inline vec3  vec3_Reflect(vec3 vec, vec3 normal);
-static inline vec3  vec3_Refract(vec3 vec, vec3 normal, float refractRatio);
-static inline vec3  vec3_CartesianToSpherical(vec3 cartesian);
-static inline vec3  vec3_SphericalToCartesian(vec3 spherical);
+static inline bool  vec3_Equal(vec3 v1, vec3 v2);
+static inline vec3  vec3_Max(vec3 v1, vec3 v2);
+static inline vec3  vec3_Min(vec3 v1, vec3 v2);
+static inline vec3  vec3_SquareRoot(vec3 v);
+static inline vec3  vec3_ReciprocalSquareRoot(vec3 v);
+static inline vec3  vec3_Reciprocal(vec3 v);
 
 /* --- vec4 --- */
 
@@ -581,7 +652,12 @@ static inline float vec4_Magnitude(vec4 vec);
 static inline float vec4_MagnitudeSquared(vec4 vec);
 static inline vec4  vec4_Normalize(vec4 vec);
 static inline vec4  vec4_Lerp(vec4 v1, vec4 v2, float t);
-static inline bool  vec4_AlmostTheSame(vec4 v1, vec4 v2);
+static inline bool  vec4_Equal(vec4 v1, vec4 v2);
+static inline vec4  vec4_Max(vec4 v1, vec4 v2);
+static inline vec4  vec4_Min(vec4 v1, vec4 v2);
+static inline vec4  vec4_SquareRoot(vec4 v);
+static inline vec4  vec4_ReciprocalSquareRoot(vec4 v);
+static inline vec4  vec4_Reciprocal(vec4 v);
 
 /* --- mat2x2 --- */
 
@@ -616,6 +692,25 @@ static inline mat4x4 mat4x4_Subtract(mat4x4 M1, mat4x4 M2);
 static inline mat4x4 mat4x4_DivideScalar(mat4x4 M, float t);
 static inline mat4x4 mat4x4_Transpose(mat4x4 M);
 
+/* --- Misc --- */
+
+// TODO: functions to generate various homogeneous matrices
+// TODO: probably the some similar functions for mat2 + mat3
+static inline float  Radians(float degrees);
+static inline float  Degrees(float radians);
+static inline vec3   Reflect(vec3 V_in, vec3 V_normal);
+static inline vec3   Refract(vec3 V_in, vec3 V_normal, float eta);
+static inline mat3x3 OrthonormalBasis(vec3 normal_in_z);
+static inline mat4x4 InverseAffine_Translation(mat4x4 M);
+static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M);
+static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M);
+static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M);
+static inline mat4x4 HomogeneousMatrix(mat3x3 M);
+static inline vec2   PolarToCartesian(vec2 polar);
+static inline vec2   CartesianToPolar(vec2 cartesian);
+static inline vec3   SphericalToCartesian(vec3 spherical);
+static inline vec3   CartesianToSpherical(vec3 cartesian);
+
 /* ---- Scalar Functions ---- */
 
 static inline float scalar_Min(float x, float y)
@@ -626,11 +721,6 @@ static inline float scalar_Min(float x, float y)
 static inline float scalar_Max(float x, float y)
 {
     return x > y ? x : y;
-}
-
-static inline float scalar_Clamp(float x, float min, float max)
-{
-    return vmax(vmin(x, max), min);
 }
 
 static inline float scalar_Add(float x, float y)
@@ -650,7 +740,7 @@ static inline float scalar_Multiply(float x, float y)
 
 static inline float scalar_Divide(float x, float y)
 {
-     return x / y;
+    return x / y;
 }
 
 static inline float scalar_Lerp(float a, float b, float t)
@@ -658,6 +748,7 @@ static inline float scalar_Lerp(float a, float b, float t)
     return a + t * (b - a);
 }
 
+// see: https://floating-point-gui.de/errors/comparison/
 static inline bool scalar_Equal(float a, float b)
 {
     float absA = vmag(a);
@@ -671,7 +762,7 @@ static inline bool scalar_Equal(float a, float b)
         // relative error is less meaningful here
         return diff < (EPSILON32 * FLT_MIN);
     } else { // use relative error
-        return (diff / vmin((absA + absB), FLT_MAX)) < EPSILON32;
+        return vdiv(diff, vmin((absA + absB), FLT_MAX)) < EPSILON32;
     }
 }
 
@@ -682,7 +773,46 @@ static inline float scalar_Magnitude(float t)
 
 static inline float scalar_MagnitudeSquared(float t)
 {
-    return t * t;
+    return vmul(t, t);
+}
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline float scalar_SquareRoot(float t)
+{
+    __m128 t_ss = _mm_set_ss(t);
+#if VMATH_APPROX
+    return _mm_mul_ss(t_ss, _mm_rsqrt_ss(t_ss))[0];
+#else
+    return _mm_sqrt_ss(t_ss)[0];
+#endif
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline float scalar_SquareRoot(float t)
+{
+    return sqrtf(t);
+}
+#endif
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline float scalar_ReciprocalSquareRoot(float t)
+{
+    __m128 t_ss = _mm_set_ss(t);
+#if VMATH_APPROX
+    return _mm_rsqrt_ss(t_ss)[0];
+#else
+    return _mm_div_ss(_mm_set_ss(1.0f), _mm_sqrt_ss(t_ss))[0];
+#endif
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline float scalar_ReciprocalSquareRoot(float t)
+{
+    return 1.0f / sqrtf(t);
+}
+#endif
+
+static inline float scalar_Reciprocal(float t)
+{
+    return 1.0f / t;
 }
 
 /* --- Vec2 Functions --- */
@@ -713,12 +843,12 @@ static inline vec2 vec2_MultiplyScalar(vec2 vec, float scalar)
 
 static inline vec2 vec2_MultiplyScalarR(float scalar, vec2 vec)
 {
-    return vec2_MultiplyScalar(vec, scalar);
+    return vmul(vec, scalar);
 }
 
 static inline vec2 vec2_DivideScalar(vec2 vec, float scalar)
 {
-    return vec2_MultiplyScalar(vec, 1.0f / scalar);
+    return vmul(vec, 1.0f / scalar);
 }
 
 static inline vec2 vec2_MultiplyComponents(vec2 v1, vec2 v2)
@@ -751,43 +881,68 @@ static inline vec3 vec2_CrossProduct(vec2 v1, vec2 v2)
 
 static inline float vec2_MagnitudeSquared(vec2 vec)
 {
-    return vec2_DotProduct(vec, vec);
+    return vdot(vec, vec);
 }
 
 static inline float vec2_Magnitude(vec2 vec)
 {
-    return sqrtf(vec2_MagnitudeSquared(vec));
+    return vsqrt(vmag2(vec));
 }
 
 static inline vec2 vec2_Normalize(vec2 vec)
 {
-    return vec2_DivideScalar(vec, vec2_Magnitude(vec));
+    return vmul(vec, vrsqrt(vmag2(vec)));
 }
 
 static inline vec2 vec2_Lerp(vec2 v1, vec2 v2, float t)
 {
-    return vec2_Add(v1, vec2_MultiplyScalar(vec2_Subtract(v2, v1), t));
+    return vadd(v1, vmul(vsub(v2, v1), t));
 }
 
-static inline bool vec2_AlmostTheSame(vec2 v1, vec2 v2)
+static inline bool vec2_Equal(vec2 v1, vec2 v2)
 {
     return vequ(v1.x, v2.x) && vequ(v1.y, v2.y);
 }
 
-static inline vec2 vec2_PolarToCartesian(vec2 polar)
+static inline vec2 vec2_Max(vec2 v1, vec2 v2)
 {
-    return (vec2) {
-        .x = polar.r * cosf(polar.theta),
-        .y = polar.r * sinf(polar.theta),
-    };
+    return vec2(
+        vmax(v1.x, v2.x),
+        vmax(v1.y, v2.y)
+    );
 }
 
-static inline vec2 vec2_CartesianToPolar(vec2 cartesian)
+static inline vec2 vec2_Min(vec2 v1, vec2 v2)
 {
-    return (vec2) {
-        .r = vec2_Magnitude(cartesian),
-        .theta = atan2f(cartesian.y, cartesian.x),
-    };
+
+    return vec2(
+        vmin(v1.x, v2.x),
+        vmin(v1.y, v2.y)
+    );
+}
+
+static inline vec2 vec2_SquareRoot(vec2 v)
+{
+    return vec2(
+        vsqrt(v.x),
+        vsqrt(v.y)
+    );
+}
+
+static inline vec2 vec2_ReciprocalSquareRoot(vec2 v)
+{
+    return vec2(
+        vrsqrt(v.x),
+        vrsqrt(v.y)
+    );
+}
+
+static inline vec2 vec2_Reciprocal(vec2 v)
+{
+    return vec2(
+        1.0f / v.x,
+        1.0f / v.y
+    );
 }
 
 /* --- Vec3 Functions --- */
@@ -853,59 +1008,94 @@ static inline vec3 vec3_CrossProduct(vec3 v1, vec3 v2)
 
 static inline vec3 vec3_MultiplyScalarR(float scalar, vec3 vec)
 {
-    return vec3_MultiplyScalar(vec, scalar);
+    return vmul(vec, scalar);
 }
 
 static inline vec3 vec3_DivideScalar(vec3 vec, float scalar)
 {
-    return vec3_MultiplyScalar(vec, 1.0f / scalar);
+    return vmul(vec, 1.0f / scalar);
 }
 
 static inline vec3 vec3_Lerp(vec3 v1, vec3 v2, float t)
 {
-    return vec3_Add(v1, vec3_MultiplyScalar(vec3_Subtract(v2, v1), t));
+    return vadd(v1, vmul(vsub(v2, v1), t));
 }
 
 static inline float vec3_MagnitudeSquared(vec3 vec)
 {
-    return vec3_DotProduct(vec, vec);
+    return vdot(vec, vec);
 }
 
 static inline float vec3_Magnitude(vec3 vec)
 {
-    return sqrtf(vec3_MagnitudeSquared(vec));
+    return vsqrt(vmag2(vec));
 }
 
 static inline vec3 vec3_Normalize(vec3 vec)
 {
-    return vec3_DivideScalar(vec, vec3_Magnitude(vec));
+    return vmul(vec, vrsqrt(vmag2(vec)));
 }
 
-static inline bool vec3_AlmostTheSame(vec3 v1, vec3 v2)
+static inline bool vec3_Equal(vec3 v1, vec3 v2)
 {
     return vequ(v1.x, v2.x) && vequ(v1.y, v2.y) && vequ(v1.z, v2.z);
 }
 
-static inline vec3 vec3_SphericalToCartesian(vec3 spherical)
+static inline vec3 vec3_Max(vec3 v1, vec3 v2)
 {
-    return (vec3) {
-        .x = spherical.rho * sinf(spherical.theta) * cosf(spherical.phi),
-        .y = spherical.rho * sinf(spherical.theta) * sinf(spherical.phi),
-        .z = spherical.rho * cosf(spherical.theta),
-    };
+    return vec3(
+        vmax(v1.x, v2.x),
+        vmax(v1.y, v2.y),
+        vmax(v1.z, v2.z)
+    );
 }
 
-static inline vec3 vec3_CartesianToSpherical(vec3 cartesian)
+static inline vec3 vec3_Min(vec3 v1, vec3 v2)
 {
-    return (vec3) {
-        .rho   = vec3_Magnitude(cartesian),
-        .theta = acosf(cartesian.z / vec3_Magnitude(cartesian)),
-        .phi   = atan2f(cartesian.y, cartesian.x),
-    };
+    return vec3(
+        vmin(v1.x, v2.x),
+        vmin(v1.y, v2.y),
+        vmin(v1.z, v2.z)
+    );
+}
+
+static inline vec3 vec3_SquareRoot(vec3 v)
+{
+    return vec3(
+        vsqrt(v.x),
+        vsqrt(v.y),
+        vsqrt(v.z)
+    );
+}
+
+static inline vec3 vec3_ReciprocalSquareRoot(vec3 v)
+{
+    return vec3(
+        vrsqrt(v.x),
+        vrsqrt(v.y),
+        vrsqrt(v.z)
+    );
+}
+
+static inline vec3 vec3_Reciprocal(vec3 v)
+{
+    return vec3(
+        1.0f / v.x,
+        1.0f / v.y,
+        1.0f / v.z
+    );
 }
 
 /* --- Vec4 Functions --- */
 
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_Add(vec4 v1, vec4 v2)
+{
+    return (vec4){
+        .m128 = _mm_add_ps(v1.m128, v2.m128),
+    };
+}
+#else
 static inline vec4 vec4_Add(vec4 v1, vec4 v2)
 {
     return (vec4) {
@@ -915,7 +1105,16 @@ static inline vec4 vec4_Add(vec4 v1, vec4 v2)
         .w = v1.w + v2.w,
     };
 }
+#endif
 
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_Subtract(vec4 v1, vec4 v2)
+{
+    return (vec4) {
+        .m128 = _mm_sub_ps(v1.m128, v2.m128),
+    };
+}
+#else
 static inline vec4 vec4_Subtract(vec4 v1, vec4 v2)
 {
     return (vec4) {
@@ -925,7 +1124,16 @@ static inline vec4 vec4_Subtract(vec4 v1, vec4 v2)
         .w = v1.w - v2.w,
     };
 }
+#endif
 
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_MultiplyScalar(vec4 vec, float scalar)
+{
+    return (vec4){
+        .m128 = _mm_mul_ps(vec.m128, _mm_set1_ps(scalar)),
+    };
+}
+#else
 static inline vec4 vec4_MultiplyScalar(vec4 vec, float scalar)
 {
     return (vec4) {
@@ -935,12 +1143,21 @@ static inline vec4 vec4_MultiplyScalar(vec4 vec, float scalar)
         .w = scalar * vec.w,
     };
 }
+#endif
 
 static inline vec4 vec4_MultiplyScalarR(float scalar, vec4 vec)
 {
-    return vec4_MultiplyScalar(vec, scalar);
+    return vmul(vec, scalar);
 }
 
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_MultiplyComponents(vec4 v1, vec4 v2)
+{
+    return (vec4){
+        .m128 = _mm_mul_ps(v1.m128, v2.m128),
+    };
+}
+#else
 static inline vec4 vec4_MultiplyComponents(vec4 v1, vec4 v2)
 {
     return (vec4) {
@@ -950,12 +1167,25 @@ static inline vec4 vec4_MultiplyComponents(vec4 v1, vec4 v2)
         .w = v1.w * v2.w,
     };
 }
+#endif
 
 static inline vec4 vec4_DivideScalar(vec4 vec, float scalar)
 {
-    return vec4_MultiplyScalar(vec, 1.0f / scalar);
+    return vmul(vec, 1.0f / scalar);
 }
 
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_DivideComponents(vec4 vdividend, vec4 vdivisor)
+{
+    return (vec4){
+#if VMATH_APPROX
+        .m128 = _mm_mul_ps(vdividend.m128, _mm_rcp_ps(vdivisor.m128)),
+#else
+        .m128 = _mm_div_ps(vdividend.m128, vdivisor.m128),
+#endif
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
 static inline vec4 vec4_DivideComponents(vec4 vdividend, vec4 vdivisor)
 {
     return (vec4) {
@@ -965,36 +1195,154 @@ static inline vec4 vec4_DivideComponents(vec4 vdividend, vec4 vdivisor)
         .w = vdividend.w / vdivisor.w,
     };
 }
+#endif
 
 static inline vec4 vec4_Lerp(vec4 v1, vec4 v2, float t)
 {
-    return vec4_Add(v1, vec4_MultiplyScalar(vec4_Subtract(v2, v1), t));
+    return vadd(v1, vmul(vsub(v2, v1), t));
 }
 
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline float vec4_DotProduct(vec4 v1, vec4 v2)
+{
+    return _mm_dp_ps(v1.m128, v2.m128, 0xFF)[0];
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
 static inline float vec4_DotProduct(vec4 v1, vec4 v2)
 {
     return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
 }
+#endif
 
 static inline float vec4_MagnitudeSquared(vec4 vec)
 {
-    return vec4_DotProduct(vec, vec);
+    return vdot(vec, vec);
 }
 
 static inline float vec4_Magnitude(vec4 vec)
 {
-    return sqrtf(vec4_MagnitudeSquared(vec));
+    return vsqrt(vmag2(vec));
 }
 
 static inline vec4 vec4_Normalize(vec4 vec)
 {
-    return vec4_DivideScalar(vec, vec4_Magnitude(vec));
+    return vdiv(vec, vmag(vec));
 }
 
-static inline bool vec4_AlmostTheSame(vec4 v1, vec4 v2)
+static inline bool vec4_Equal(vec4 v1, vec4 v2)
 {
     return vequ(v1.x, v2.x) && vequ(v1.y, v2.y) && vequ(v1.z, v2.z) && vequ(v1.w, v2.w);
 }
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_Max(vec4 v1, vec4 v2)
+{
+    __m128 comp = _mm_cmpgt_ps(v1.m128, v2.m128);
+    return (vec4){
+        .m128 = _mm_blendv_ps(v2.m128, v1.m128, comp),
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline vec4 vec4_Max(vec4 v1, vec4 v2)
+{
+    return vec4(
+        vmax(v1.x, v2.x),
+        vmax(v1.y, v2.y),
+        vmax(v1.z, v2.z),
+        vmax(v1.w, v2.w)
+    );
+}
+#endif
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_Min(vec4 v1, vec4 v2)
+{
+    __m128 comp = _mm_cmpgt_ps(v1.m128, v2.m128);
+    return (vec4){
+        .m128 = _mm_blendv_ps(v1.m128, v2.m128, comp),
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline vec4 vec4_Min(vec4 v1, vec4 v2)
+{
+    return vec4(
+        vmin(v1.x, v2.x),
+        vmin(v1.y, v2.y),
+        vmin(v1.z, v2.z),
+        vmin(v1.w, v2.w)
+    );
+}
+#endif
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_SquareRoot(vec4 v)
+{
+    return (vec4){
+#if VMATH_APPROX
+        .m128 = _mm_mul_ps(v.m128, _mm_rsqrt_ps(v.m128)),
+#else
+        .m128 = _mm_sqrt_ps(v.m128),
+#endif
+    };
+}
+#elif VMATH_SIMD == VMATH_SIMD_NONE
+static inline vec4 vec4_SquareRoot(vec4 v)
+{
+    return vec4(
+        vsqrt(v.x),
+        vsqrt(v.y),
+        vsqrt(v.z),
+        vsqrt(v.w)
+    );
+}
+#endif
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_ReciprocalSquareRoot(vec4 v)
+{
+    return (vec4){
+#if VMATH_APPROX
+        .m128 = _mm_rsqrt_ps(v.m128),
+#else
+        .m128 = _mm_div_ps(_mm_set1_ps(1.0f), _mm_sqrt_ps(v.m128)),
+#endif
+    };
+}
+#else
+static inline vec4 vec4_ReciprocalSquareRoot(vec4 v)
+{
+    return vec4(
+        vrsqrt(v.x),
+        vrsqrt(v.y),
+        vrsqrt(v.z),
+        vrsqrt(v.w)
+    );
+}
+#endif
+
+#if VMATH_SIMD > VMATH_SIMD_NONE
+static inline vec4 vec4_Reciprocal(vec4 v)
+{
+    return (vec4){
+#if VMATH_APPROX
+        .m128 = _mm_rcp_ps(v.m128),
+#else
+        .m128 = _mm_div_ps(_mm_set1_ps(1.0f), v.m128),
+#endif
+    };
+}
+#else
+static inline vec4 vec4_Reciprocal(vec4 v)
+{
+    return vec4(
+        1.0f / v.x,
+        1.0f / v.y,
+        1.0f / v.z,
+        1.0f / v.w
+    );
+}
+#endif
+
 
 /* ---- 2x2 Matrix Functions ---- */
 
@@ -1009,8 +1357,8 @@ static inline vec2 mat2x2_MultiplyVector(mat2x2 M, vec2 V)
 static inline mat2x2 mat2x2_MultiplyMatrix(mat2x2 left, mat2x2 right)
 {
     return (mat2x2){
-        .X = mat2x2_MultiplyVector(left, right.X),
-        .Y = mat2x2_MultiplyVector(left, right.Y),
+        .X = vmul(left, right.X),
+        .Y = vmul(left, right.Y),
     };
 }
 
@@ -1025,35 +1373,35 @@ static inline mat2x2 mat2x2_Transpose(mat2x2 M)
 static inline mat2x2 mat2x2_MultiplyScalar(mat2x2 M, float t)
 {
     return (mat2x2){
-        .X = vec2_MultiplyScalar(M.X, t),
-        .Y = vec2_MultiplyScalar(M.Y, t),
+        .X = vmul(M.X, t),
+        .Y = vmul(M.Y, t),
     };
 }
 
 static inline mat2x2 mat2x2_MultiplyScalarR(float t, mat2x2 m)
 {
-    return mat2x2_MultiplyScalar(m, t);
+    return vmul(m, t);
 }
 
 static inline mat2x2 mat2x2_Add(mat2x2 M1, mat2x2 M2)
 {
     return (mat2x2){
-        .X = vec2_Add(M1.X, M2.X),
-        .Y = vec2_Add(M1.Y, M2.Y),
+        .X = vadd(M1.X, M2.X),
+        .Y = vadd(M1.Y, M2.Y),
     };
 }
 
 static inline mat2x2 mat2x2_Subtract(mat2x2 M1, mat2x2 M2)
 {
     return (mat2x2){
-        .X = vec2_Subtract(M1.X, M2.X),
-        .Y = vec2_Subtract(M1.Y, M2.Y),
+        .X = vsub(M1.X, M2.X),
+        .Y = vsub(M1.Y, M2.Y),
     };
 }
 
 static inline mat2x2 mat2x2_DivideScalar(mat2x2 M, float t)
 {
-    return mat2x2_MultiplyScalar(M, 1.0f / t);
+    return vmul(M, 1.0f / t);
 }
 
 /* ---- 3x3 Matrix Functions ---- */
@@ -1070,9 +1418,9 @@ static inline vec3 mat3x3_MultiplyVector(mat3x3 M, vec3 V)
 static inline mat3x3 mat3x3_MultiplyMatrix(mat3x3 left, mat3x3 right)
 {
     return (mat3x3){
-        .X = mat3x3_MultiplyVector(left, right.X),
-        .Y = mat3x3_MultiplyVector(left, right.Y),
-        .Z = mat3x3_MultiplyVector(left, right.Z),
+        .X = vmul(left, right.X),
+        .Y = vmul(left, right.Y),
+        .Z = vmul(left, right.Z),
     };
 }
 
@@ -1088,38 +1436,38 @@ static inline mat3x3 mat3x3_Transpose(mat3x3 M)
 static inline mat3x3 mat3x3_MultiplyScalar(mat3x3 M, float t)
 {
     return (mat3x3){
-        .X = vec3_MultiplyScalar(M.X, t),
-        .Y = vec3_MultiplyScalar(M.Y, t),
-        .Z = vec3_MultiplyScalar(M.Z, t),
+        .X = vmul(M.X, t),
+        .Y = vmul(M.Y, t),
+        .Z = vmul(M.Z, t),
     };
 }
 
 static inline mat3x3 mat3x3_MultiplyScalarR(float t, mat3x3 M)
 {
-    return mat3x3_MultiplyScalar(M, t);
+    return vmul(M, t);
 }
 
 static inline mat3x3 mat3x3_Add(mat3x3 M1, mat3x3 M2)
 {
     return (mat3x3){
-        .X = vec3_Add(M1.X, M2.X),
-        .Y = vec3_Add(M1.Y, M2.Y),
-        .Z = vec3_Add(M1.Z, M2.Z),
+        .X = vadd(M1.X, M2.X),
+        .Y = vadd(M1.Y, M2.Y),
+        .Z = vadd(M1.Z, M2.Z),
     };
 }
 
 static inline mat3x3 mat3x3_Subtract(mat3x3 M1, mat3x3 M2)
 {
     return (mat3x3){
-        .X = vec3_Subtract(M1.X, M2.X),
-        .Y = vec3_Subtract(M1.Y, M2.Y),
-        .Z = vec3_Subtract(M1.Z, M2.Z),
+        .X = vsub(M1.X, M2.X),
+        .Y = vsub(M1.Y, M2.Y),
+        .Z = vsub(M1.Z, M2.Z),
     };
 }
 
 static inline mat3x3 mat3x3_DivideScalar(mat3x3 M, float t)
 {
-    return mat3x3_MultiplyScalar(M, 1.0f / t);
+    return vmul(M, 1.0f / t);
 }
 
 /* ---- 4x4 Matrix Functions ---- */
@@ -1161,7 +1509,7 @@ static inline vec4 mat4x4_MultiplyVector(mat4x4 M, vec4 V)
     tz = _mm_mul_ps(M.Z.m128, zz);
 
     ww = _mm_set1_ps(V.w);
-    tw = _mm_mul_ps(M.W..m128, ww);
+    tw = _mm_mul_ps(M.W.m128, ww);
 
     txyzw = _mm_add_ps(_mm_add_ps(tx, ty), _mm_add_ps(tz, tw));
 
@@ -1182,10 +1530,10 @@ static inline vec4 mat4x4_MultiplyVector(mat4x4 M, vec4 V)
 static inline mat4x4 mat4x4_MultiplyMatrix(mat4x4 left, mat4x4 right)
 {
     return (mat4x4){
-        .X = mat4x4_MultiplyVector(left, right.X),
-        .Y = mat4x4_MultiplyVector(left, right.Y),
-        .Z = mat4x4_MultiplyVector(left, right.Z),
-        .W = mat4x4_MultiplyVector(left, right.W),
+        .X = vmul(left, right.X),
+        .Y = vmul(left, right.Y),
+        .Z = vmul(left, right.Z),
+        .W = vmul(left, right.W),
     };
 }
 
@@ -1251,17 +1599,17 @@ static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 M, float t)
 static inline mat4x4 mat4x4_MultiplyScalar(mat4x4 M, float t)
 {
     return (mat4x4){
-        .X = vec4_MultiplyScalar(M.x, t),
-        .Y = vec4_MultiplyScalar(M.y, t),
-        .Z = vec4_MultiplyScalar(M.z, t),
-        .W = vec4_MultiplyScalar(M.w, t),
+        .X = vmul(M.X, t),
+        .Y = vmul(M.Y, t),
+        .Z = vmul(M.Z, t),
+        .W = vmul(M.W, t),
     };
 }
 #endif
 
 static inline mat4x4 mat4x4_MultiplyScalarR(float t, mat4x4 M)
 {
-    return mat4x4_MultiplyScalar(M, t);
+    return vmul(M, t);
 }
 
 #if VMATH_SIMD == VMATH_SIMD_AVX2
@@ -1278,10 +1626,10 @@ static inline mat4x4 mat4x4_Add(mat4x4 M1, mat4x4 M2)
 static inline mat4x4 mat4x4_Add(mat4x4 M1, mat4x4 M2)
 {
     return (mat4x4){
-        .X = vec4_Add(M1.X, M2.X),
-        .Y = vec4_Add(M1.Y, M2.Y),
-        .Z = vec4_Add(M1.Z, M2.Z),
-        .W = vec4_Add(M1.W, M2.W),
+        .X = vadd(M1.X, M2.X),
+        .Y = vadd(M1.Y, M2.Y),
+        .Z = vadd(M1.Z, M2.Z),
+        .W = vadd(M1.W, M2.W),
     };
 }
 #endif
@@ -1300,17 +1648,17 @@ static inline mat4x4 mat4x4_Subtract(mat4x4 M1, mat4x4 M2)
 static inline mat4x4 mat4x4_Subtract(mat4x4 M1, mat4x4 M2)
 {
     return (mat4x4){
-        .x = vec4_Subtract(M1.x, M2.X),
-        .y = vec4_Subtract(M1.y, M2.Y),
-        .z = vec4_Subtract(M1.z, M2.Z),
-        .w = vec4_Subtract(M1.w, M2.W),
+        .X = vsub(M1.X, M2.X),
+        .Y = vsub(M1.Y, M2.Y),
+        .Z = vsub(M1.Z, M2.Z),
+        .W = vsub(M1.W, M2.W),
     };
 }
 #endif
 
 static inline mat4x4 mat4x4_DivideScalar(mat4x4 M, float t)
 {
-    return mat4x4_MultiplyScalar(M, 1.0f / t);
+    return vmul(M, 1.0f / t);
 }
 
 /* --- Misc Functions ---- */
@@ -1325,9 +1673,9 @@ static inline float Degrees(float radians)
     return radians * 180.0f / PI32;
 }
 
-static inline vec3 Reflect(vec3 V_in, vec3 normal)
+static inline vec3 Reflect(vec3 V_in, vec3 V_normal)
 {
-    return vsub(V_in, vmul(normal, 2.0f * vdot(V_in, normal)));
+    return vsub(V_in, vmul(V_normal, 2.0f * vdot(V_in, V_normal)));
 }
 
 // eta = IOR (outer) / IOR (inner)
@@ -1452,15 +1800,26 @@ static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
     __m128 Y_tr = M.Y.m128;
     __m128 Z_tr = M.Z.m128;
 
-    // mag2 = X.x^2 Y.y^2 Z.z^2 1
     __m128 ones = _mm_set1_ps(1.0f);
+
     __m128 mag2 = _mm_mul_ps(X_tr, X_tr);
-    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Y_tr, Y_tr));
-    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Z_tr, Z_tr));
+#if VMATH_SIMD == VMATH_SIMD_AVX2
+    mag2 = _mm_fmadd_ps(Y_tr, Y_tr, mag2);
+    mag2 = _mm_fmadd_ps(Z_tr, Z_tr, mag2);
+#elif VMATH_SIMD == VMATH_SIMD_SSE
+    mag2 = _mm_add_ps(_mm_mul_ps(Y_tr, Y_tr), mag2);
+    mag2 = _mm_add_ps(_mm_mul_ps(Z_tr, Z_tr), mag2);
+#endif
+
+    // mag2 = X.x^2 Y.y^2 Z.z^2 1
     mag2 = _mm_blend_ps(ones, mag2, VMATH_BLEND_MASK(1, 1, 1, 0));
 
     // inv_mag2 = 1/X.x^2 1/Y.y^2 1/Z.z^2 1
+#if VMATH_APPROX
+    __m128 inv_mag2 = _mm_rcp_ps(mag2);
+#else
     __m128 inv_mag2 = _mm_div_ps(ones, mag2);
+#endif
 
     X_tr = _mm_mul_ps(inv_mag2, X_tr);
     Y_tr = _mm_mul_ps(inv_mag2, Y_tr);
@@ -1509,15 +1868,25 @@ static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
     __m128 Y_tr = _mm_shuffle_ps(XY_xy, M.Z.m128, _MM_SHUFFLE(3, 1, 3, 1)); // X.y Y.y Z.y 0
     __m128 Z_tr = _mm_shuffle_ps(XY_zw, M.Z.m128, _MM_SHUFFLE(3, 2, 2, 0)); // X.z Y.z Z.z 0
 
-    // mag2 = X.x^2 Y.y^2 Z.z^2 1
     __m128 ones = _mm_set1_ps(1.0f);
-    __m128 mag2 = _mm_mul_ps(X_tr, X_tr);
-    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Y_tr, Y_tr));
-    mag2 = _mm_add_ps(mag2, _mm_mul_ps(Z_tr, Z_tr));
-    mag2 = _mm_blend_ps(ones, mag2, VMATH_BLEND_MASK(1, 1, 1, 0));
 
-    // inv_mag2 = 1/X.x^2 1/Y.y^2 1/Z.z^2 1
+    __m128 mag2 = _mm_mul_ps(X_tr, X_tr);
+#if VMATH_SIMD == VMATH_SIMD_AVX2
+    mag2 = _mm_fmadd_ps(Y_tr, Y_tr, mag2);
+    mag2 = _mm_fmadd_ps(Z_tr, Z_tr, mag2);
+#elif VMATH_SIMD == VMATH_SIMD_SSE
+    mag2 = _mm_add_ps(_mm_mul_ps(Y_tr, Y_tr), mag2);
+    mag2 = _mm_add_ps(_mm_mul_ps(Z_tr, Z_tr), mag2);
+#endif
+
+    mag2 = _mm_blend_ps(ones, mag2, VMATH_BLEND_MASK(1, 1, 1, 0)); // |X|^2 |Y|^2 |Z|^2 1
+
+    // inv_mag2 = 1/|X|^2 1/|Y|^2 1/|Z|^2 1
+#if VMATH_APPROX
+    __m128 inv_mag2 = _mm_rcp_ps(mag2);
+#else
     __m128 inv_mag2 = _mm_div_ps(ones, mag2);
+#endif
 
     X_tr = _mm_mul_ps(inv_mag2, X_tr);
     Y_tr = _mm_mul_ps(inv_mag2, Y_tr);
@@ -1527,12 +1896,11 @@ static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
     __m128 T_y = _mm_set1_ps(M.T.y);
     __m128 T_z = _mm_set1_ps(M.T.z);
 
-#if VMATH_SIMD == VMATH_SIMD_AVX2
     __m128 T = _mm_mul_ps(T_x, X_tr);
+#if VMATH_SIMD == VMATH_SIMD_AVX2
     T = _mm_fmadd_ps(T_y, Y_tr, T);
     T = _mm_fmadd_ps(T_z, Z_tr, T);
 #elif VMATH_SIMD == VMATH_SIMD_SSE
-    __m128 T = _mm_mul_ps(T_x, X_tr);
     T = _mm_add_ps(_mm_mul_ps(T_y, Y_tr), T);
     T = _mm_add_ps(_mm_mul_ps(T_z, Z_tr), T);
 #endif
@@ -1565,9 +1933,43 @@ static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
 static inline mat4x4 HomogeneousMatrix(mat3x3 M)
 {
     return (mat4x4){
-        .X = {.xyz = M.X, .w = 0},
-        .Y = {.xyz = M.Y, .w = 0},
-        .Z = {.xyz = M.Z, .w = 0},
+        .X = {.x = M.X.x, .y = M.X.y, .z = M.X.z, .w = 0},
+        .Y = {.x = M.Y.x, .y = M.Y.y, .z = M.Y.z, .w = 0},
+        .Z = {.x = M.Z.x, .y = M.Z.y, .z = M.Z.z, .w = 0},
         .T = vec4(0, 0, 0, 1),
+    };
+}
+
+static inline vec2 PolarToCartesian(vec2 polar)
+{
+    return (vec2) {
+        .x = polar.r * cosf(polar.theta),
+        .y = polar.r * sinf(polar.theta),
+    };
+}
+
+static inline vec2 CartesianToPolar(vec2 cartesian)
+{
+    return (vec2) {
+        .r = vmag(cartesian),
+        .theta = atan2f(cartesian.y, cartesian.x),
+    };
+}
+
+static inline vec3 SphericalToCartesian(vec3 spherical)
+{
+    return (vec3) {
+        .x = spherical.rho * sinf(spherical.theta) * cosf(spherical.phi),
+        .y = spherical.rho * sinf(spherical.theta) * sinf(spherical.phi),
+        .z = spherical.rho * cosf(spherical.theta),
+    };
+}
+
+static inline vec3 CartesianToSpherical(vec3 cartesian)
+{
+    return (vec3) {
+        .rho   = vmag(cartesian),
+        .theta = acosf(cartesian.z / vmag(cartesian)),
+        .phi   = atan2f(cartesian.y, cartesian.x),
     };
 }
