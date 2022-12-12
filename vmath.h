@@ -701,11 +701,11 @@ static inline float  Degrees(float radians);
 static inline vec3   Reflect(vec3 V_in, vec3 V_normal);
 static inline vec3   Refract(vec3 V_in, vec3 V_normal, float eta);
 static inline mat3x3 OrthonormalBasis(vec3 normal_in_z);
-static inline mat4x4 InverseAffine_Translation(mat4x4 M);
-static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M);
-static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M);
-static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M);
-static inline mat4x4 HomogeneousMatrix(mat3x3 M);
+static inline mat4x4 InverseAffineMatrix_T(mat4x4 M);
+static inline mat4x4 InverseAffineMatrix_TR(mat4x4 M);
+static inline mat4x4 InverseAffineMatrix_TS(mat4x4 M);
+static inline mat4x4 InverseAffineMatrix_TRS(mat4x4 M);
+static inline mat4x4 AffineMatrix(mat3x3 M);
 static inline vec2   PolarToCartesian(vec2 polar);
 static inline vec2   CartesianToPolar(vec2 cartesian);
 static inline vec3   SphericalToCartesian(vec3 spherical);
@@ -1718,7 +1718,7 @@ static inline mat3x3 OrthonormalBasis(vec3 normal_in_z)
 // | 0 0 1 Tz |
 // | 0 0 0  1 |
 #if VMATH_SIMD > VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_Translation(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_T(mat4x4 M) {
     return (mat4x4){
         .X = M.X,
         .Y = M.Y,
@@ -1727,7 +1727,7 @@ static inline mat4x4 InverseAffine_Translation(mat4x4 M) {
     };
 }
 #elif VMATH_SIMD == VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_Translation(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_T(mat4x4 M) {
     return mat4x4(
         1, 0, 0, -M.T.x,
         0, 1, 0, -M.T.y,
@@ -1745,7 +1745,7 @@ static inline mat4x4 InverseAffine_Translation(mat4x4 M) {
 // where |X| = |Y| = |Z| = 1
 // and X.Y = 0, X.Z = 0, Y.Z = 0
 #if VMATH_SIMD > VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_TR(mat4x4 M) {
     __m128 XY_xy = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(1, 0, 1, 0)); // X.x X.y Y.x Y.y
     __m128 XY_zw = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(3, 2, 3, 2)); // X.z X.w Y.z Y.w
 
@@ -1777,7 +1777,7 @@ static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M) {
     };
 }
 #elif VMATH_SIMD == VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_TR(mat4x4 M) {
     return mat4x4(
         M.X.x, M.X.y, M.X.z, -vdot(M.T.xyz, M.X.xyz),
         M.Y.x, M.Y.y, M.Y.z, -vdot(M.T.xyz, M.Y.xyz),
@@ -1795,7 +1795,7 @@ static inline mat4x4 InverseAffine_TranslationRotation(mat4x4 M) {
 // where |X| = a, |Y| = b, |Z| = c
 // and a != 0, b != 0, c != 0
 #if VMATH_SIMD > VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_TS(mat4x4 M) {
     __m128 X_tr = M.X.m128;
     __m128 Y_tr = M.Y.m128;
     __m128 Z_tr = M.Z.m128;
@@ -1837,7 +1837,7 @@ static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
     };
 }
 #elif VMATH_SIMD == VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_TS(mat4x4 M) {
     float inv_mx2 = 1.0f / (M.X.x * M.X.x);
     float inv_my2 = 1.0f / (M.Y.y * M.Y.y);
     float inv_mz2 = 1.0f / (M.Z.z * M.Z.z);
@@ -1859,7 +1859,7 @@ static inline mat4x4 InverseAffine_TranslationScale(mat4x4 M) {
 // where |X| = a, |Y| = b, |Z| = c
 // and a != 0, b != 0, c != 0
 #if VMATH_SIMD > VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_TRS(mat4x4 M) {
     // transpose
     __m128 XY_xy = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(1, 0, 1, 0)); // X.x X.y Y.x Y.y
     __m128 XY_zw = _mm_shuffle_ps(M.X.m128, M.Y.m128, _MM_SHUFFLE(3, 2, 3, 2)); // X.z X.w Y.z Y.w
@@ -1915,7 +1915,7 @@ static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
     };
 }
 #elif VMATH_SIMD == VMATH_SIMD_NONE
-static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
+static inline mat4x4 InverseAffineMatrix_TRS(mat4x4 M) {
     float inv_mx2 = 1.0f / vmag2(M.X.xyz);
     float inv_my2 = 1.0f / vmag2(M.Y.xyz);
     float inv_mz2 = 1.0f / vmag2(M.Z.xyz);
@@ -1930,7 +1930,7 @@ static inline mat4x4 InverseAffine_TranslationRotationScale(mat4x4 M) {
 #endif
 
 // Converts a 3x3 matrix to a 4x4 matrix of the form
-static inline mat4x4 HomogeneousMatrix(mat3x3 M)
+static inline mat4x4 AffineMatrix(mat3x3 M)
 {
     return (mat4x4){
         .X = {.x = M.X.x, .y = M.X.y, .z = M.X.z, .w = 0},
