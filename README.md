@@ -84,9 +84,9 @@ printf("v1 = " VEC3_FMT "\n", VEC3_ARG(v1));
 | `mat4(`<br>`m11, m12, m13, m14,`<br>`m21, m22, m23, m24,`<br>`m31, m32, m33, m34,`<br>`m41, m42, m43, m44)`  | `\| m11 m12 m13 m14 \|`<br>`\| m21 m22 m23 m24 \|`<br>`\| m31 m32 m33 m34 \|`<br>`\| m41 m42 m43 m44 \|` | `mat4` specified left-right, top-down |
 | `Radians(deg)` | `π * deg / 180` | Convert degrees to radians |
 | `Degrees(rad)` | `180 * rad / π` | Convert radians to degrees |
-| `Reflect(v_in, v_norm)` | `...` | Compute the reflection of `v_in` about `v_norm` |
-| `Refract(v_in, v_norm, eta)` | `...` | Compute the refraction of `v_in` about `v_norm` with `eta = n_out / n_in` |
-| `OrthonormalBasis(v)` | `...` | Compute a matrix which transforms `<0, 0, 1>` into `v_normal_in_z` where the basis vectors are orthonormal |
+| `Reflect(v_in, v_norm)` | `...` | Compute the outgoing reflection of an incoming vector `v_in` about `v_norm` (points against `v_in`) |
+| `Refract(v_in, v_norm, eta)` | `...` | Compute the refraction of an incoming vector `v_in` about `v_norm` (points against `v_in`) with `eta = n_out / n_in` |
+| `OrthonormalBasis(norm_in_z)` | `...` | Compute a matrix which transforms `<0, 0, 1>` into `norm_in_z` where the basis vectors are orthonormal |
 | `InverseAffineMatrix_T(M)` | `M^-1` | Compute `M^-1` where `M` is an affine translation matrix |
 | `InverseAffineMatrix_TR(M)` | `M^-1` | Compute `M^-1` where `M` is an affine translation-rotation matrix |
 | `InverseAffineMatrix_TS(M)` | `M^-1` | Compute `M^-1` where `M` is an affine translation-scale matrix |
